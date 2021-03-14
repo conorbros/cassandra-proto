@@ -1,27 +1,27 @@
-use std::io::{Cursor, Read};
 use super::*;
 use crate::compression::Compressor;
 use crate::error;
-use std::io;
 use crate::frame::frame_response::ResponseBody;
 use crate::frame::FromCursor;
 use crate::types::data_serialization_types::decode_timeuuid;
 use crate::types::{from_bytes, from_u16_bytes, CStringList, UUID_LEN};
-use bytes::{BytesMut};
+use bytes::{Buf, BytesMut};
+use std::io;
+use std::io::{Cursor, Read};
 
 #[derive(Debug, Clone)]
 pub struct FrameHeader {
-    version:  Version,
+    version: Version,
     flags: Vec<Flag>,
     stream: u16,
-    opcode : Opcode,
-    length : usize,
+    opcode: Opcode,
+    length: usize,
 }
 
 pub fn parse_frame<E>(
-    src: & mut BytesMut,
+    src: &mut BytesMut,
     compressor: &dyn Compressor<CompressorError = E>,
-    frame_header_original: &Option<FrameHeader>
+    frame_header_original: &Option<FrameHeader>,
 ) -> error::Result<(Option<Frame>, Option<FrameHeader>)>
 where
     E: std::error::Error,
@@ -31,16 +31,16 @@ where
     let max_frame_len = 1024 * 1024 * 15; //15MB
     let frame_header: FrameHeader;
 
-    if src.len() < head_len {
+    if src.len() < head_len && frame_header_original.is_none() {
         // Not enough data to read the head
         return Ok((None, None));
     }
 
-    let version:  Version;
+    let version: Version;
     let flags: Vec<Flag>;
     let stream: u16;
-    let opcode : Opcode;
-    let length : usize;
+    let opcode: Opcode;
+    let length: usize;
 
     //let mut body_bytes = Vec::with_capacity(frame_header.length);
 
@@ -52,7 +52,6 @@ where
         stream = header.stream;
         opcode = header.opcode;
         length = header.length;
-
     } else {
         let mut version_bytes = [0; Version::BYTE_LENGTH];
         let mut flag_bytes = [0; Flag::BYTE_LENGTH];
@@ -81,21 +80,19 @@ where
         flags,
         stream,
         opcode,
-        length
+        length,
     };
 
     if (frame_header.length as usize) > max_frame_len {
         //TODO throw error
-        return Err(error::Error::Io(
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Max frame length exceeded",
-            )
-        ));
+        return Err(error::Error::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Max frame length exceeded",
+        )));
     }
-    src.reserve(frame_header.length);
 
     if src.len() < frame_header.length {
+        src.reserve(frame_header.length - src.len());
         return Ok((None, Some(frame_header)));
     }
 
@@ -109,7 +106,11 @@ where
     outer_body_cursor.read_exact(&mut body_bytes)?;
     
 
-    let full_body = if frame_header.flags.iter().any(|flag| flag == &Flag::Compression) {
+    let full_body = if frame_header
+        .flags
+        .iter()
+        .any(|flag| flag == &Flag::Compression)
+    {
         compressor
             .decode(body_bytes)
             .map_err(|err| error::Error::from(err.to_string()))?
@@ -149,7 +150,7 @@ where
         stream: frame_header.stream,
         body: body,
         tracing_id: tracing_id,
-        warnings: warnings,
+        warnings,
     };
 
     src.reserve(head_len);
